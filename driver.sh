@@ -12,3 +12,5 @@ module list
 # horizontal_mpasjedi_diff
 mkdir -p fig_horizontal_mpasjedi_diff
 python ./scripts/horizontal_mpasjedi_diff.py
+
+
