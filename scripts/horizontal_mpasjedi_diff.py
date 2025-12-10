@@ -12,6 +12,9 @@ import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 from netCDF4 import Dataset
 import matplotlib
+import argparse
+import sys
+
 matplotlib.use('agg')
 
 warnings.filterwarnings('ignore')
@@ -34,9 +37,19 @@ bot = cen_lat - half
 top = cen_lat + half
 
 
-def plot_inc(var_inc, decimal=2):
-    max_inc = np.around(np.max(var_inc), decimal)
-    min_inc = np.around(np.min(var_inc), decimal)
+def plot_inc(var_diff, decimal=2):
+    # Convert to array and ignore NaNs
+    arr = np.asarray(var_diff)
+    max_abs = np.nanmax(np.abs(arr))
+
+    if max_abs == 0:
+        print("Warning: difference between file A and file B is zero everywhere.")
+        print("No plot will be generated.")
+        return None, None
+
+    max_inc = np.around(np.max(var_diff), decimal)
+    min_inc = np.around(np.min(var_diff), decimal)
+    
     # decide the color contours based on the increment values
     clevmax = max((abs(max_inc), abs(min_inc)))
     inc = 0.1 * clevmax
@@ -44,16 +57,24 @@ def plot_inc(var_inc, decimal=2):
     cm = colormap.diff_colormap(clevs)
     return clevs, cm
 
+def main(filea, fileb, static):
+    """
+    Your existing processing code goes here.
+    Replace references to hard-coded jfilea/jfileb/jstatic
+    with these function arguments.
+    """
+    print("FILE A :", filea)
+    print("FILE B :", fileb)
+    print("STATIC  :", static)
 
-def main():
     # janalysis = "/scratch1/BMC/wrfruc/jjhu/rundir/wrkflow-test/Btuning/2024050601_lbc/uv233/singleob_rh4rv0_avgheight_std14/mpasin.nc"
     # jbackgrnd = "/scratch1/BMC/wrfruc/jjhu/rundir/wrkflow-test/Btuning/2024050601_tuneB/bkg/mpasout.2024-05-06_01.00.00.nc"
     # jstatic = "/scratch1/BMC/wrfruc/jjhu/rundir/wrkflow-test/Btuning/2024050601_tuneB/invariant.nc"
 
     
-    jfilea = '/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/OPSROOT/hrly_12km21/com/rrfs/v2.1.1/rrfs.20240527/00/ic/det/init.nc'
-    jfileb = '/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/OPSROOT/hrly_12km21/com/rrfs/v2.1.1/rrfs.20240527/05/fcst/det/mpasout.2024-05-27_06.00.00.nc'
-    jstatic = "/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/rrfs-workflow/fix/meshes/conus12km.invariant.nc_L60_GFS"
+    #jfilea = '/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/OPSROOT/hrly_12km21/com/rrfs/v2.1.1/rrfs.20240527/00/ic/det/init.nc'
+    #jfileb = '/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/OPSROOT/hrly_12km21/com/rrfs/v2.1.1/rrfs.20240527/05/fcst/det/mpasout.2024-05-27_06.00.00.nc'
+    #jstatic = "/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/rrfs-workflow/fix/meshes/conus12km.invariant.nc_L60_GFS"
 
     figdir = "./fig_horizontal_mpasjedi_diff/"
 
@@ -63,9 +84,9 @@ def main():
     # target_lat, target_lon = 36.265, -95.145
 
     # Open NETCDF4 dataset for reading
-    nc_a  = Dataset(jfilea, mode='r')
-    nc_b = Dataset(jfileb, mode='r')
-    f_latlon = Dataset(jstatic, "r")
+    nc_a  = Dataset(filea, mode='r')
+    nc_b = Dataset(fileb, mode='r')
+    f_latlon = Dataset(static, "r")
 
     # read lat,lon information
     lats = np.array(f_latlon.variables['latCell'][:]) * 180.0 / np.pi  # Latitude of cells, rad
@@ -131,6 +152,12 @@ def main():
         # Get the colormap setting
         clevs, cm = plot_inc(jedi_diff)   
         
+        if clevs is None:
+            # Already printed a warning in plot_inc
+            # Leave script gracefully
+            sys.exit(0)
+
+
         cmap1=plt.cm.get_cmap('bwr_r',20)
         cmaplist = [cmap1(i) for i in range(cmap1.N)]
         cmaplist[9] = [1,1,1,1]
@@ -258,4 +285,27 @@ def main():
                         
         
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(
+        description="Compute horizontal MPAS-JEDI diff between two files."
+    )
+
+    parser.add_argument(
+        "--filea", required=True,
+        help="Path to first MPAS-JEDI output file"
+    )
+
+    parser.add_argument(
+        "--fileb", required=True,
+        help="Path to second MPAS-JEDI output file"
+    )
+
+    parser.add_argument(
+        "--static", required=True,
+        help="Path to static MPAS mesh / metadata file"
+    )
+
+    args = parser.parse_args()
+
+    main(args.filea, args.fileb, args.static)
+
+
