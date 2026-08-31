@@ -7,7 +7,7 @@ This script checks and summarizes differences between two NetCDF files.
 ### 1. Link the two NetCDF files
 
 Create symbolic links to the two NetCDF files to be compared in the
-`scripts-check-ncdiff` directory.
+`scripts-ncdiff` directory.
 
 For example:
 
