@@ -1,311 +1,534 @@
 #!/usr/bin/env python
-from matplotlib.tri import Triangulation, TriAnalyzer
+
 import warnings
-import colormap
+import argparse
+import os
+
 import numpy as np
-import matplotlib.ticker as mticker
+import matplotlib
+matplotlib.use("agg")
+
+import matplotlib.pyplot as plt
 import matplotlib as mpl
-from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 import cartopy.feature as cfeature
 import cartopy.crs as ccrs
-# import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
 from netCDF4 import Dataset
-import matplotlib
-import argparse
-import sys
-
-matplotlib.use('agg')
-
-warnings.filterwarnings('ignore')
-
-# ------------ USER INPUT ----------------------------------------------------------
-plot_var = "Increment"
-decimal = 3            # number of decimals to round for text boxes
-
-plot_box_width = 72.   # define size of plot domain (units: lat/lon degrees)
-plot_box_height = 36.
-cen_lat = 34.5
-cen_lon = -97.5
-
-# Determine extent for plot domain
-half = plot_box_width / 2.
-left = cen_lon - half
-right = cen_lon + half
-half = plot_box_height / 2.
-bot = cen_lat - half
-top = cen_lat + half
 
 
-def plot_inc(var_diff, decimal=2):
-    # Convert to array and ignore NaNs
-    arr = np.asarray(var_diff)
-    max_abs = np.nanmax(np.abs(arr))
+warnings.filterwarnings("ignore")
 
-    if max_abs == 0:
-        print("Warning: difference between file A and file B is zero everywhere.")
-        print("No plot will be generated.")
-        return None, None
 
-    max_inc = np.around(np.max(var_diff), decimal)
-    min_inc = np.around(np.min(var_diff), decimal)
-    
-    # decide the color contours based on the increment values
-    clevmax = max((abs(max_inc), abs(min_inc)))
-    inc = 0.1 * clevmax
-    clevs = np.arange(-1.0 * clevmax, 1.0 * clevmax + inc, inc)
-    cm = colormap.diff_colormap(clevs)
-    return clevs, cm
+# =============================================================================
+# USER SETTINGS
+# =============================================================================
 
-def main(filea, fileb, static):
-    """
-    Your existing processing code goes here.
-    Replace references to hard-coded jfilea/jfileb/jstatic
-    with these function arguments.
-    """
-    print("FILE A :", filea)
-    print("FILE B :", fileb)
-    print("STATIC  :", static)
+figdir = "./figures"
+decimal = 3
 
-    # janalysis = "/scratch1/BMC/wrfruc/jjhu/rundir/wrkflow-test/Btuning/2024050601_lbc/uv233/singleob_rh4rv0_avgheight_std14/mpasin.nc"
-    # jbackgrnd = "/scratch1/BMC/wrfruc/jjhu/rundir/wrkflow-test/Btuning/2024050601_tuneB/bkg/mpasout.2024-05-06_01.00.00.nc"
-    # jstatic = "/scratch1/BMC/wrfruc/jjhu/rundir/wrkflow-test/Btuning/2024050601_tuneB/invariant.nc"
+markersize = 0.6
+alpha = 0.9
 
-    
-    #jfilea = '/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/OPSROOT/hrly_12km21/com/rrfs/v2.1.1/rrfs.20240527/00/ic/det/init.nc'
-    #jfileb = '/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/OPSROOT/hrly_12km21/com/rrfs/v2.1.1/rrfs.20240527/05/fcst/det/mpasout.2024-05-27_06.00.00.nc'
-    #jstatic = "/gpfs/f6/bil-pmp/scratch/Liaofan.Lin/250801-rrfs-workflow/rrfs-workflow/fix/meshes/conus12km.invariant.nc_L60_GFS"
+# Lambert Conformal projection
+ref_lon = -97.5
+ref_lat = 36.0
+trulat1 = 36.0
+trulat2 = 36.0
 
-    figdir = "./fig_horizontal_mpasjedi_diff/"
+# Number of color intervals
+ncolors = 20
 
-    # varible to plot
-    variable = "SMOIS" # LANDMASK, ISLTYP, IVGTYP, SMOIS
 
-    # target_lat, target_lon = 36.265, -95.145
+# =============================================================================
+# HELPERS
+# =============================================================================
 
-    # Open NETCDF4 dataset for reading
-    nc_a  = Dataset(filea, mode='r')
-    nc_b = Dataset(fileb, mode='r')
-    f_latlon = Dataset(static, "r")
+def create_map_axis():
+    """Create the Lambert Conformal map axis."""
 
-    # read lat,lon information
-    lats = np.array(f_latlon.variables['latCell'][:]) * 180.0 / np.pi  # Latitude of cells, rad
-    lons0 = np.array(f_latlon.variables['lonCell'][:]) * 180.0 / np.pi  # Longitude of cells, rad
-    lons = np.where(lons0 > 180.0, lons0 - 360.0, lons0)
-    # z = f_latlon.variables['zgrid'][:]  # Geometric height of layer interfaces, m MSL
+    projection = ccrs.LambertConformal(
+        central_longitude=ref_lon,
+        central_latitude=ref_lat,
+        standard_parallels=(trulat1, trulat2),
+    )
 
-    # Grab variables
-    if variable == "SMOIS":
+    ax = plt.axes(projection=projection)
+
+    ax.coastlines(resolution="50m")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.7)
+    ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor="gray")
+
+    return ax
+
+
+def read_variable(nc_a, nc_b, variable):
+    """Read the requested variable from File A and File B."""
+
+    variable = variable.lower()
+
+    if variable == "smois":
         units = "m3/m3"
-        jedi_a = nc_a.variables['smois'][0, :, :]
-        jedi_b = nc_b.variables['smois'][0, :, :]     
-        
-    if variable == "LANDMASK":
-        units = "-"
-        jedi_a = nc_a.variables['landmask'][:] 
-        jedi_b = nc_b.variables['landmask'][:]
-               
-    if variable == "ISLTYP":
-        units = "-"
-        jedi_a = nc_a.variables['isltyp'][:] 
-        jedi_b = nc_b.variables['isltyp'][:]               
- 
-    if variable == "IVGTYP":
-        units = "-"
-        jedi_a = nc_a.variables['ivgtyp'][:] 
-        jedi_b = nc_b.variables['ivgtyp'][:]                  
+        jedi_a = np.asarray(nc_a.variables["smois"][0, :, :])
+        jedi_b = np.asarray(nc_b.variables["smois"][0, :, :])
 
-    jedi_inc_all = jedi_a - jedi_b  # the increment
+    elif variable == "tslb":
+        units = "K"
+        jedi_a = np.asarray(nc_a.variables["tslb"][0, :, :])
+        jedi_b = np.asarray(nc_b.variables["tslb"][0, :, :])
 
-    for lev in range(6, 9, 1):
-        
-        jedi_a_lev  = jedi_a[:, lev]
-        jedi_b_lev  = jedi_b[:, lev]
-        jedi_diff   = jedi_a_lev - jedi_b_lev
+    elif variable == 'theta':
+        units = "K"
+        jedi_a = nc_a.variables["theta"][0, :, :].astype(np.float64)  # (Time, nCells, nVertLevels)
+        jedi_b = nc_b.variables["theta"][0, :, :].astype(np.float64)
+        pres_a = (nc_a.variables['pressure_p'][0, :, :] + nc_b['pressure_base'][0, :, :])/100.0
+        pres_b = (nc_b.variables['pressure_p'][0, :, :] + nc_b['pressure_base'][0, :, :])/100.0
+        dividend_a = (1000.0/pres_a)**(0.286)
+        dividend_b = (1000.0/pres_b)**(0.286)
+        jedi_a = jedi_a / dividend_a
+        jedi_b = jedi_b / dividend_b 
 
-        # Print some final stats
-        print(f"Level: {lev+1},  max: {np.around(np.max(jedi_diff), decimal)}, min: {np.around(np.min(jedi_diff), decimal)}")
+    elif variable == 'qv':
+        units = "g/kg"
+        jedi_a = nc_a.variables['qv'][0, :, :] * 1000.0
+        jedi_b = nc_b.variables['qv'][0, :, :] * 1000.0
 
-        
-        ## CREATE PLOT ##############################
-        fig = plt.figure(figsize=(12.5, 10))
-            
-        # use scatter to plot the field
-        markersize=0.6
-        alpha=0.9
-        
-        # use a LambertConformal projection, choose trulat1 and trulat2 around the center of your domain to reduce distortion.
-        ref_lon=-97.5  # reference or central lon
-        ref_lat=36.0   # reference or centeal lat
-        trulat1=36.0   # first standard parallel, no distortion
-        trulat2=36.0   # second standar parallel, no distortion
-        
-        projection = ccrs.LambertConformal(central_longitude=ref_lon, central_latitude=ref_lat, standard_parallels=(trulat1, trulat2))
-        ax = plt.axes(projection=projection)
-        
-        # add costlines, country borders, state/province borders
-        ax.coastlines(resolution='50m')  # '110m', '50m', or '10m'
-        ax.add_feature(cfeature.BORDERS, linewidth=0.7)
-        ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
-           
-        
-        # Get the colormap setting
-        clevs, cm = plot_inc(jedi_diff)   
-        
-        if clevs is None:
-            # Already printed a warning in plot_inc
-            # Leave script gracefully
-            sys.exit(0)
+    else:
+        raise ValueError(
+            f"Unsupported variable: {variable}. "
+            "Currently supported variables are: smois, tslb"
+        )
+
+    return jedi_a, jedi_b, units
 
 
-        cmap1=plt.cm.get_cmap('bwr_r',20)
-        cmaplist = [cmap1(i) for i in range(cmap1.N)]
-        cmaplist[9] = [1,1,1,1]
-        cmaplist[10] = [1,1,1,1]
-        cmap1 = mpl.colors.LinearSegmentedColormap.from_list('Custom cmap', cmaplist, cmap1.N)
-        
-        
-        sc = ax.scatter(lons, lats, c=jedi_diff, cmap=cmap1, \
-                        vmin=clevs[0], vmax=clevs[-1], \
-                        transform=ccrs.PlateCarree(), s=markersize, alpha=alpha)
-        
-        
-        # Colorbar
-        cbar = plt.colorbar(sc, label='', orientation='horizontal', shrink=0.8, aspect=50, pad=0.01)    
-        cbar.set_label(units, size=10)
-        cbar.ax.tick_params(labelsize=10, rotation=30)
-        cbar.set_ticks(clevs)
-        
-        
-        # Add titles, text, and save the figure
-        plt.suptitle(f"{variable} Diff at Level: {lev+1}", fontsize=20, y=0.95)
-        #subtitle1_minmax = f"min: {np.around(np.min(jedi_inc), decimal)}\nmax: {np.around(np.max(jedi_inc), decimal)}"
-        #m1.text(left * 0.99, bot * 1.01, f"{subtitle1_minmax}", fontsize=6, ha='left', va='bottom')
-        plt.tight_layout()
-        plt.savefig(f"{figdir}/diff_{variable}_z{lev}.png", dpi=250, bbox_inches='tight')
-        plt.close()
+def get_shared_absolute_scale(variable, field_a, field_b):
+    """
+    Return ONE common color scale for File A and File B.
 
-        # CREATE PLOT ##############################
-        fig = plt.figure(figsize=(12.5, 10))
-            
-        # use scatter to plot the field
-        markersize=0.6
-        alpha=0.9
-        
-        # use a LambertConformal projection, choose trulat1 and trulat2 around the center of your domain to reduce distortion.
-        ref_lon=-97.5  # reference or central lon
-        ref_lat=36.0   # reference or centeal lat
-        trulat1=36.0   # first standard parallel, no distortion
-        trulat2=36.0   # second standar parallel, no distortion
-        
-        projection = ccrs.LambertConformal(central_longitude=ref_lon, central_latitude=ref_lat, standard_parallels=(trulat1, trulat2))
-        ax = plt.axes(projection=projection)
-        
-        # add costlines, country borders, state/province borders
-        ax.coastlines(resolution='50m')  # '110m', '50m', or '10m'
-        ax.add_feature(cfeature.BORDERS, linewidth=0.7)
-        ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
+    File A and File B will use the exact same:
+      * levels
+      * colormap
+      * normalization
+    """
 
-        if variable == "SMOIS":
-            clevs = np.linspace(0, 0.5, 21)
-        else:
-            clevs = np.linspace(jedi_a_lev.min(), jedi_a_lev.max(), 21)
+    variable = variable.lower()
+
+    if variable == "smois":
+        # Fixed soil-moisture range
+        vmin = 0.0
+        vmax = 0.5
+
+    else:
+        # Use the overall min/max from BOTH files
+        vmin = min(
+            float(np.nanmin(field_a)),
+            float(np.nanmin(field_b)),
+        )
+
+        vmax = max(
+            float(np.nanmax(field_a)),
+            float(np.nanmax(field_b)),
+        )
+
+    levels = np.linspace(vmin, vmax, ncolors + 1)
+
+    cmap = mpl.colormaps["jet"].resampled(ncolors)
+
+    norm = mpl.colors.BoundaryNorm(
+        boundaries=levels,
+        ncolors=cmap.N,
+        clip=True,
+    )
+
+    return levels, cmap, norm
+
+
+def get_difference_scale(diff):
+    """Create a symmetric difference color scale centered on zero."""
+
+    max_abs = float(np.nanmax(np.abs(diff)))
+
+    if max_abs == 0.0:
+        return None, None, None
+
+    levels = np.linspace(
+        -max_abs,
+        max_abs,
+        ncolors + 1,
+    )
+
+    base_cmap = mpl.colormaps["bwr_r"].resampled(ncolors)
+    colors = [base_cmap(i) for i in range(base_cmap.N)]
+
+    # Make the two bins nearest zero white
+    colors[9] = [1.0, 1.0, 1.0, 1.0]
+    colors[10] = [1.0, 1.0, 1.0, 1.0]
+
+    cmap = mpl.colors.ListedColormap(colors)
+
+    norm = mpl.colors.BoundaryNorm(
+        boundaries=levels,
+        ncolors=cmap.N,
+        clip=True,
+    )
+
+    return levels, cmap, norm
+
+
+def plot_field(
+    lons,
+    lats,
+    field,
+    levels,
+    cmap,
+    norm,
+    units,
+    title,
+    output_file,
+):
+    """Plot one field using an explicitly supplied color scale."""
+
+    fig = plt.figure(figsize=(12.5, 10))
+    ax = create_map_axis()
+
+    sc = ax.scatter(
+        lons,
+        lats,
+        c=field,
+        cmap=cmap,
+        norm=norm,
+        transform=ccrs.PlateCarree(),
+        s=markersize,
+        alpha=alpha,
+    )
+
+    cbar = plt.colorbar(
+        sc,
+        orientation="horizontal",
+        shrink=0.8,
+        aspect=50,
+        pad=0.01,
+        boundaries=levels,
+        ticks=levels,
+    )
+
+    cbar.set_label(units, size=10)
+    cbar.ax.tick_params(labelsize=10, rotation=30)
+
+    plt.suptitle(
+        title,
+        fontsize=16,
+        y=0.98,
+    )
+
+    plt.tight_layout(
+        rect=[0.0, 0.0, 1.0, 0.98]
+    )
+
+    plt.savefig(
+        output_file,
+        dpi=250,
+        bbox_inches="tight",
+    )
+
+    plt.close()
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main(filea, fileb, static, variable, level):
+
+    variable = variable.lower()
+
+    os.makedirs(figdir, exist_ok=True)
+
+    print("")
+    print("============================================================")
+    print("MPAS-JEDI multivariable comparison")
+    print("============================================================")
+    print("FILE A   :", filea)
+    print("FILE B   :", fileb)
+    print("STATIC   :", static)
+    print("VARIABLE :", variable)
+    print("LEVEL    :", level)
+    print("")
+
+    # -------------------------------------------------------------------------
+    # Read files
+    # -------------------------------------------------------------------------
+
+    with Dataset(filea, mode="r") as nc_a, \
+         Dataset(fileb, mode="r") as nc_b, \
+         Dataset(static, mode="r") as f_latlon:
+
+        lats = (
+            np.asarray(f_latlon.variables["latCell"][:])
+            * 180.0
+            / np.pi
+        )
+
+        lons0 = (
+            np.asarray(f_latlon.variables["lonCell"][:])
+            * 180.0
+            / np.pi
+        )
+
+        lons = np.where(
+            lons0 > 180.0,
+            lons0 - 360.0,
+            lons0,
+        )
         
-        # colormap
-        cmap1=plt.cm.get_cmap('jet',20)
-           
-        sc = ax.scatter(lons, lats, c=jedi_a_lev, cmap=cmap1, \
-                        vmin=clevs[0], vmax=clevs[-1],\
-                        transform=ccrs.PlateCarree(), s=markersize, alpha=alpha)
-        
-        # Colorbar
-        cbar = plt.colorbar(sc, label='', orientation='horizontal', shrink=0.8, aspect=50, pad=0.01)    
-        cbar.set_label(units, size=10)
-        cbar.ax.tick_params(labelsize=10, rotation=30)
-        cbar.set_ticks(clevs)
-        
-        # Add titles, text, and save the figure
-        plt.suptitle(f"{variable} File A at Level: {lev+1}", fontsize=20, y=0.95)
-        #subtitle1_minmax = f"min: {np.around(np.min(jedi_inc), decimal)}\nmax: {np.around(np.max(jedi_inc), decimal)}"
-        #m1.text(left * 0.99, bot * 1.01, f"{subtitle1_minmax}", fontsize=6, ha='left', va='bottom')
-        plt.tight_layout()
-        plt.savefig(f"{figdir}/file_a_{variable}_z{lev}.png", dpi=250, bbox_inches='tight')
-        plt.close()
-        
-                
-        # CREATE PLOT ##############################
-        fig = plt.figure(figsize=(12.5, 10))
-            
-        # use scatter to plot the field
-        markersize=0.6
-        alpha=0.9
-        
-        # use a LambertConformal projection, choose trulat1 and trulat2 around the center of your domain to reduce distortion.
-        ref_lon=-97.5  # reference or central lon
-        ref_lat=36.0   # reference or centeal lat
-        trulat1=36.0   # first standard parallel, no distortion
-        trulat2=36.0   # second standar parallel, no distortion
-        
-        projection = ccrs.LambertConformal(central_longitude=ref_lon, central_latitude=ref_lat, standard_parallels=(trulat1, trulat2))
-        ax = plt.axes(projection=projection)
-        
-        # add costlines, country borders, state/province borders
-        ax.coastlines(resolution='50m')  # '110m', '50m', or '10m'
-        ax.add_feature(cfeature.BORDERS, linewidth=0.7)
-        ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
-        
-        if variable == "SMOIS":
-            clevs = np.linspace(0, 0.5, 21)
-        else:
-            clevs = np.linspace(jedi_a_lev.min(), jedi_a_lev.max(), 21)
-        
-        # colormap
-        cmap1=plt.cm.get_cmap('jet',20)
-           
-                      
-        sc = ax.scatter(lons, lats, c=jedi_b_lev, cmap=cmap1, \
-                        vmin=clevs[0], vmax=clevs[-1],\
-                        transform=ccrs.PlateCarree(), s=markersize, alpha=alpha)
-        
-        # Colorbar
-        cbar = plt.colorbar(sc, label='', orientation='horizontal', shrink=0.8, aspect=50, pad=0.01)    
-        cbar.set_label(units, size=10)
-        cbar.ax.tick_params(labelsize=10, rotation=30)
-        cbar.set_ticks(clevs)
-        
-        # Add titles, text, and save the figure
-        plt.suptitle(f"{variable} File B at Level: {lev+1}", fontsize=20, y=0.95)
-        #subtitle1_minmax = f"min: {np.around(np.min(jedi_inc), decimal)}\nmax: {np.around(np.max(jedi_inc), decimal)}"
-        #m1.text(left * 0.99, bot * 1.01, f"{subtitle1_minmax}", fontsize=6, ha='left', va='bottom')
-        plt.tight_layout()
-        plt.savefig(f"{figdir}/file_b_{variable}_z{lev}.png", dpi=250, bbox_inches='tight')
-        plt.close()
-        
-        
-                        
-        
-if __name__ == '__main__':
+        landmask = np.asarray(
+            f_latlon.variables["landmask"][:]
+        )
+
+        jedi_a, jedi_b, units = read_variable(
+            nc_a,
+            nc_b,
+            variable,
+        )
+
+    # -------------------------------------------------------------------------
+    # Convert 1-based level to 0-based Python index
+    #
+    # --level 6 means Python index 5.
+    # -------------------------------------------------------------------------
+
+    lev = level - 1
+
+    if lev < 0 or lev >= jedi_a.shape[1]:
+        raise ValueError(
+            f"Requested level {level} is outside the available range "
+            f"1-{jedi_a.shape[1]} for variable '{variable}'."
+        )
+
+    jedi_a_lev = np.asarray(jedi_a[:, lev])
+    jedi_b_lev = np.asarray(jedi_b[:, lev])
+    jedi_diff = jedi_a_lev - jedi_b_lev
+
+    # -------------------------------------------------------------------------
+    # Difference statistics over LAND only
+    # landmask = 1: land
+    # landmask = 0: water
+    # -------------------------------------------------------------------------
+
+    land_diff = jedi_diff[landmask == 1]
+
+    land_count = land_diff.size
+    land_min   = float(np.nanmin(land_diff))
+    land_max   = float(np.nanmax(land_diff))
+    land_mean  = float(np.nanmean(land_diff))
+    land_std   = float(np.nanstd(land_diff))
+
+    # -------------------------------------------------------------------------
+    # Statistics
+    # -------------------------------------------------------------------------
+
+    a_min = float(np.nanmin(jedi_a_lev))
+    a_max = float(np.nanmax(jedi_a_lev))
+
+    b_min = float(np.nanmin(jedi_b_lev))
+    b_max = float(np.nanmax(jedi_b_lev))
+
+    diff_min = float(np.nanmin(jedi_diff))
+    diff_max = float(np.nanmax(jedi_diff))
+
+    print(
+        f"File A level {level}: "
+        f"min={a_min:.{decimal}f}, "
+        f"max={a_max:.{decimal}f}"
+    )
+
+    print(
+        f"File B level {level}: "
+        f"min={b_min:.{decimal}f}, "
+        f"max={b_max:.{decimal}f}"
+    )
+
+    print(
+        f"Difference level {level}: "
+        f"min={diff_min:.{decimal}f}, "
+        f"max={diff_max:.{decimal}f}"
+    )
+
+    # =========================================================================
+    # ONE SHARED COLOR SCALE FOR FILE A AND FILE B
+    # =========================================================================
+
+    absolute_levels, absolute_cmap, absolute_norm = \
+        get_shared_absolute_scale(
+            variable,
+            jedi_a_lev,
+            jedi_b_lev,
+        )
+
+    print("")
+    print("Shared File A / File B color scale:")
+    print(f"  min = {absolute_levels[0]:.{decimal}f}")
+    print(f"  max = {absolute_levels[-1]:.{decimal}f}")
+    print("")
+
+    # =========================================================================
+    # DIFFERENCE COLOR SCALE
+    # =========================================================================
+
+    diff_levels, diff_cmap, diff_norm = \
+        get_difference_scale(jedi_diff)
+
+    # =========================================================================
+    # FILENAMES
+    #
+    # Example for TSLB level 6:
+    #
+    #   tslb_z6_fileA.png
+    #   tslb_z6_fileB.png
+    #   tslb_z6_diff.png
+    # =========================================================================
+
+    file_a_png = os.path.join(
+        figdir,
+        f"{variable}_z{level}_fileA.png",
+    )
+
+    file_b_png = os.path.join(
+        figdir,
+        f"{variable}_z{level}_fileB.png",
+    )
+
+    diff_png = os.path.join(
+        figdir,
+        f"{variable}_z{level}_diff.png",
+    )
+
+    # =========================================================================
+    # FILE A
+    # =========================================================================
+
+    plot_field(
+        lons=lons,
+        lats=lats,
+        field=jedi_a_lev,
+        levels=absolute_levels,
+        cmap=absolute_cmap,
+        norm=absolute_norm,
+        units=units,
+        title=f"{variable.upper()} File A (Analysis) at Level: {level}; Unit: {units}\n",
+        output_file=file_a_png,
+    )
+
+    # =========================================================================
+    # FILE B
+    #
+    # Uses the EXACT SAME absolute_levels, absolute_cmap, and absolute_norm
+    # as File A.
+    # =========================================================================
+
+    plot_field(
+        lons=lons,
+        lats=lats,
+        field=jedi_b_lev,
+        levels=absolute_levels,
+        cmap=absolute_cmap,
+        norm=absolute_norm,
+        units=units,
+        title=f"{variable.upper()} File B (Background) at Level: {level}; Unit: {units}\n",
+        output_file=file_b_png,
+    )
+
+    # =========================================================================
+    # DIFFERENCE
+    # =========================================================================
+
+    if diff_levels is None:
+        print(
+            "Warning: difference between File A and File B "
+            "is zero everywhere."
+        )
+        print("No difference plot will be generated.")
+
+    else:
+        plot_field(
+            lons=lons,
+            lats=lats,
+            field=jedi_diff,
+            levels=diff_levels,
+            cmap=diff_cmap,
+            norm=diff_norm,
+            units=units,
+            title=(
+                f"{variable.upper()} Diff (Analysis Increment) at Level: {level}; Unit: {units}\n"
+                f"Over land: n={land_count}, "
+                f"max={np.nanmax(land_diff):.{decimal}f}, "
+                f"min={np.nanmin(land_diff):.{decimal}f}, "
+                f"mean={land_mean:.{decimal}f}, "
+                f"std={land_std:.{decimal}f}"
+            ),
+            output_file=diff_png,
+        )
+
+    print("")
+    print("Generated figures:")
+    print(f"  {file_a_png}")
+    print(f"  {file_b_png}")
+
+    if diff_levels is not None:
+        print(f"  {diff_png}")
+
+    print("")
+
+
+# =============================================================================
+# COMMAND LINE
+# =============================================================================
+
+if __name__ == "__main__":
+
     parser = argparse.ArgumentParser(
-        description="Compute horizontal MPAS-JEDI diff between two files."
+        description=(
+            "Compare one MPAS variable and vertical level "
+            "between two MPAS files."
+        )
     )
 
     parser.add_argument(
-        "--filea", required=True,
-        help="Path to first MPAS-JEDI output file"
+        "--filea",
+        required=True,
+        help="Path to File A",
     )
 
     parser.add_argument(
-        "--fileb", required=True,
-        help="Path to second MPAS-JEDI output file"
+        "--fileb",
+        required=True,
+        help="Path to File B",
     )
 
     parser.add_argument(
-        "--static", required=True,
-        help="Path to static MPAS mesh / metadata file"
+        "--static",
+        required=True,
+        help="Path to static MPAS mesh / metadata file",
+    )
+
+    parser.add_argument(
+        "--variable",
+        required=True,
+        help="Variable to process, e.g. smois or tslb",
+    )
+
+    parser.add_argument(
+        "--level",
+        required=True,
+        type=int,
+        help="Vertical level using 1-based numbering",
     )
 
     args = parser.parse_args()
 
-    main(args.filea, args.fileb, args.static)
-
-
+    main(
+        filea=args.filea,
+        fileb=args.fileb,
+        static=args.static,
+        variable=args.variable,
+        level=args.level,
+    )
